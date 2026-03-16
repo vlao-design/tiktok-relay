@@ -1,10 +1,22 @@
 const WebSocket = require('ws');
+const http = require('http');
 const { WebcastPushConnection } = require('tiktok-live-connector');
 
 const PORT = process.env.PORT || 3000;
-const wss = new WebSocket.Server({ port: PORT });
+
+// HTTP server so Railway knows the service is alive
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('TikTok relay is running');
+});
+
+const wss = new WebSocket.Server({ server });
 
 console.log(`TikTok relay running on port ${PORT}`);
+
+server.listen(PORT, () => {
+  console.log(`HTTP + WS server listening on port ${PORT}`);
+});
 
 wss.on('connection', (clientWs) => {
   let tiktokConnection = null;
