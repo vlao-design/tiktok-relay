@@ -46,6 +46,8 @@ wss.on('connection', (clientWs) => {
           },
         });
 
+        clientWs.send(JSON.stringify({ type: 'connecting', username }));
+
         tiktokConnection.connect()
           .then((state) => {
             console.log('Connected to TikTok:', state);
