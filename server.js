@@ -60,10 +60,3 @@ wss.on('connection', (clientWs) => {
     }
   });
 });
-```
-
-Then push to GitHub again:
-```
-git add .
-git commit -m "fix package name"
-git push
