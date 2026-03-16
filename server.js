@@ -4,7 +4,6 @@ const { WebcastPushConnection } = require('tiktok-live-connector');
 
 const PORT = process.env.PORT || 3000;
 
-// HTTP server so Railway knows the service is alive
 const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end('TikTok relay is running');
@@ -35,7 +34,17 @@ wss.on('connection', (clientWs) => {
           try { tiktokConnection.disconnect(); } catch {}
         }
 
-        tiktokConnection = new WebcastPushConnection(username);
+        tiktokConnection = new WebcastPushConnection(username, {
+          sessionId: process.env.TIKTOK_SESSION_ID || '',
+          enableExtendedGiftInfo: false,
+          enableWebsocketUpgrade: true,
+          requestPollingIntervalMs: 2000,
+          requestHeaders: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Referer': 'https://www.tiktok.com/',
+            'Origin': 'https://www.tiktok.com',
+          },
+        });
 
         tiktokConnection.connect()
           .then((state) => {
@@ -84,3 +93,10 @@ wss.on('connection', (clientWs) => {
     }
   });
 });
+```
+
+Push it:
+```
+git add .
+git commit -m "add session id and headers"
+git push
