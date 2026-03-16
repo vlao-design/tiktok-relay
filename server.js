@@ -93,10 +93,3 @@ wss.on('connection', (clientWs) => {
     }
   });
 });
-```
-
-Push it:
-```
-git add .
-git commit -m "add session id and headers"
-git push
