@@ -77,6 +77,7 @@ wss.on('connection', (clientWs) => {
 
         tiktokConnection.on('chat', (data) => {
           if (clientWs.readyState !== WebSocket.OPEN) return;
+          console.log('Chat:', data.uniqueId, data.comment);
           if (!sentConnected) {
             sentConnected = true;
             clientWs.send(JSON.stringify({ type: 'connected', username }));
@@ -112,6 +113,18 @@ wss.on('connection', (clientWs) => {
               clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
             }
           }
+        });
+
+        tiktokConnection.on('member', (data) => {
+          console.log('Member joined:', data.uniqueId);
+        });
+
+        tiktokConnection.on('roomUser', (data) => {
+          console.log('Room user count:', data.viewerCount);
+        });
+
+        tiktokConnection.on('social', (data) => {
+          console.log('Social event:', data.uniqueId, data.displayType);
         });
       }
     } catch(e) {
