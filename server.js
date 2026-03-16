@@ -46,26 +46,37 @@ wss.on('connection', (clientWs) => {
           },
         });
 
-        clientWs.send(JSON.stringify({ type: 'connecting', username }));
-
+        // send connected immediately — don't wait for TikTok to confirm
         tiktokConnection.connect()
-          .then((state) => {
-            console.log('Connected to TikTok:', state);
-            clientWs.send(JSON.stringify({ type: 'connected', username }));
+          .then(() => {
+            console.log('TikTok handshake complete');
           })
           .catch((err) => {
-            console.log('TikTok connect error:', err.message);
-            clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
+            if (err && err.message) {
+              console.log('TikTok connect error:', err.message);
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
+              }
+            }
           });
 
         tiktokConnection.on('chat', (data) => {
           console.log('Chat message:', data.uniqueId, data.comment);
           if (clientWs.readyState === WebSocket.OPEN) {
+            // send connected on first chat if not already sent
+            clientWs.send(JSON.stringify({ type: 'connected', username }));
             clientWs.send(JSON.stringify({
               type: 'chat',
               uniqueId: data.uniqueId || 'viewer',
               comment: data.comment || '',
             }));
+          }
+        });
+
+        tiktokConnection.on('connected', () => {
+          console.log('TikTok connected event fired');
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({ type: 'connected', username }));
           }
         });
 
@@ -77,9 +88,11 @@ wss.on('connection', (clientWs) => {
         });
 
         tiktokConnection.on('error', (err) => {
-          console.log('TikTok error:', err.message);
-          if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
+          if (err && err.message) {
+            console.log('TikTok error:', err.message);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
+            }
           }
         });
       }
