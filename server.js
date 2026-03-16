@@ -20,13 +20,13 @@ server.listen(PORT, () => {
 wss.on('connection', (clientWs) => {
   let tiktokConnection = null;
   let currentUsername = null;
+  let sentConnected = false;
   console.log('Browser connected to relay');
 
   clientWs.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
 
-      // handle keepalive ping
       if (msg.action === 'ping') {
         clientWs.send(JSON.stringify({ type: 'pong' }));
         return;
@@ -35,7 +35,6 @@ wss.on('connection', (clientWs) => {
       if (msg.action === 'connect' && msg.username) {
         const username = msg.username.replace(/^@/, '');
 
-        // don't reconnect if already connected to same username
         if (currentUsername === username && tiktokConnection) {
           console.log('Already connected to:', username);
           clientWs.send(JSON.stringify({ type: 'connected', username }));
@@ -43,6 +42,7 @@ wss.on('connection', (clientWs) => {
         }
 
         currentUsername = username;
+        sentConnected = false;
         console.log('Connecting to TikTok username:', username);
 
         if (tiktokConnection) {
@@ -76,20 +76,22 @@ wss.on('connection', (clientWs) => {
           });
 
         tiktokConnection.on('chat', (data) => {
-          console.log('Chat:', data.uniqueId, data.comment);
-          if (clientWs.readyState === WebSocket.OPEN) {
+          if (clientWs.readyState !== WebSocket.OPEN) return;
+          if (!sentConnected) {
+            sentConnected = true;
             clientWs.send(JSON.stringify({ type: 'connected', username }));
-            clientWs.send(JSON.stringify({
-              type: 'chat',
-              uniqueId: data.uniqueId || 'viewer',
-              comment: data.comment || '',
-            }));
           }
+          clientWs.send(JSON.stringify({
+            type: 'chat',
+            uniqueId: data.uniqueId || 'viewer',
+            comment: data.comment || '',
+          }));
         });
 
         tiktokConnection.on('connected', () => {
           console.log('TikTok connected event for:', username);
-          if (clientWs.readyState === WebSocket.OPEN) {
+          if (!sentConnected && clientWs.readyState === WebSocket.OPEN) {
+            sentConnected = true;
             clientWs.send(JSON.stringify({ type: 'connected', username }));
           }
         });
@@ -97,6 +99,7 @@ wss.on('connection', (clientWs) => {
         tiktokConnection.on('disconnected', () => {
           console.log('TikTok disconnected for:', username);
           currentUsername = null;
+          sentConnected = false;
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({ type: 'disconnected' }));
           }
@@ -119,6 +122,7 @@ wss.on('connection', (clientWs) => {
   clientWs.on('close', () => {
     console.log('Browser disconnected');
     currentUsername = null;
+    sentConnected = false;
     if (tiktokConnection) {
       try { tiktokConnection.disconnect(); } catch {}
       tiktokConnection = null;
