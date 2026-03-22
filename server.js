@@ -11,17 +11,115 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocket.Server({ server });
 
-console.log(`TikTok relay running on port ${PORT}`);
-
 server.listen(PORT, () => {
-  console.log(`HTTP + WS server listening on port ${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
 
 wss.on('connection', (clientWs) => {
   let tiktokConnection = null;
   let currentUsername = null;
-  let sentConnected = false;
-  console.log('Browser connected to relay');
+  let reconnectTimeout = null;
+  let lastMessageTime = Date.now();
+
+  // 🧠 anti-spam
+  const userCooldown = new Map();
+  const messageCache = new Set();
+
+  const SPAM_COOLDOWN = 1500;
+  const DUPLICATE_TTL = 5000;
+
+  function isSpam(user, msg) {
+    const now = Date.now();
+
+    if (!msg || msg.length < 1) return true;
+
+    // cooldown per user
+    if (userCooldown.has(user)) {
+      if (now - userCooldown.get(user) < SPAM_COOLDOWN) return true;
+    }
+    userCooldown.set(user, now);
+
+    // duplicate messages
+    const key = user + msg;
+    if (messageCache.has(key)) return true;
+
+    messageCache.add(key);
+    setTimeout(() => messageCache.delete(key), DUPLICATE_TTL);
+
+    return false;
+  }
+
+  function connectTikTok(username, attempt = 0) {
+    if (tiktokConnection) {
+      try { tiktokConnection.disconnect(); } catch {}
+      tiktokConnection = null;
+    }
+
+    console.log(`Connecting to ${username} (attempt ${attempt})`);
+
+    tiktokConnection = new WebcastPushConnection(username, {
+      enableWebsocketUpgrade: true,
+      requestPollingIntervalMs: 1500,
+    });
+
+    tiktokConnection.connect().catch(() => {
+      scheduleReconnect(username, attempt);
+    });
+
+    tiktokConnection.on('chat', (data) => {
+      lastMessageTime = Date.now();
+
+      const user = data.uniqueId || 'viewer';
+      const msg = data.comment || '';
+
+      if (isSpam(user, msg)) return;
+
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({
+          type: 'chat',
+          uniqueId: user,
+          comment: msg
+        }));
+      }
+    });
+
+    tiktokConnection.on('connected', () => {
+      console.log('Connected:', username);
+      attempt = 0;
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({ type: 'connected', username }));
+      }
+    });
+
+    tiktokConnection.on('disconnected', () => {
+      console.log('Disconnected');
+      scheduleReconnect(username, attempt);
+    });
+
+    tiktokConnection.on('error', () => {
+      console.log('Error');
+      scheduleReconnect(username, attempt);
+    });
+
+    // 👀 watchdog
+    setInterval(() => {
+      if (Date.now() - lastMessageTime > 15000) {
+        console.log('No messages, reconnecting...');
+        scheduleReconnect(username, attempt);
+      }
+    }, 7000);
+  }
+
+  function scheduleReconnect(username, attempt) {
+    if (reconnectTimeout) return;
+
+    const delay = Math.min(10000, 2000 + attempt * 2000);
+
+    reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
+      connectTikTok(username, attempt + 1);
+    }, delay);
+  }
 
   clientWs.on('message', (raw) => {
     try {
@@ -34,111 +132,15 @@ wss.on('connection', (clientWs) => {
 
       if (msg.action === 'connect' && msg.username) {
         const username = msg.username.replace(/^@/, '');
-
-        if (currentUsername === username && tiktokConnection) {
-          console.log('Already connected to:', username);
-          clientWs.send(JSON.stringify({ type: 'connected', username }));
-          return;
-        }
-
         currentUsername = username;
-        sentConnected = false;
-        console.log('Connecting to TikTok username:', username);
-
-        if (tiktokConnection) {
-          try { tiktokConnection.disconnect(); } catch {}
-          tiktokConnection = null;
-        }
-
-        tiktokConnection = new WebcastPushConnection(username, {
-          sessionId: process.env.TIKTOK_SESSION_ID || '',
-          enableExtendedGiftInfo: false,
-          enableWebsocketUpgrade: true,
-          requestPollingIntervalMs: 2000,
-          requestHeaders: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Referer': 'https://www.tiktok.com/',
-            'Origin': 'https://www.tiktok.com',
-          },
-        });
-
-        tiktokConnection.connect()
-          .then(() => {
-            console.log('TikTok handshake complete for:', username);
-          })
-          .catch((err) => {
-            if (err && err.message) {
-              console.log('TikTok connect error:', err.message);
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
-              }
-            }
-          });
-
-        tiktokConnection.on('chat', (data) => {
-          if (clientWs.readyState !== WebSocket.OPEN) return;
-          console.log('Chat:', data.uniqueId, data.comment);
-          if (!sentConnected) {
-            sentConnected = true;
-            clientWs.send(JSON.stringify({ type: 'connected', username }));
-          }
-          clientWs.send(JSON.stringify({
-            type: 'chat',
-            uniqueId: data.uniqueId || 'viewer',
-            comment: data.comment || '',
-          }));
-        });
-
-        tiktokConnection.on('connected', () => {
-          console.log('TikTok connected event for:', username);
-          if (!sentConnected && clientWs.readyState === WebSocket.OPEN) {
-            sentConnected = true;
-            clientWs.send(JSON.stringify({ type: 'connected', username }));
-          }
-        });
-
-        tiktokConnection.on('disconnected', () => {
-          console.log('TikTok disconnected for:', username);
-          currentUsername = null;
-          sentConnected = false;
-          if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({ type: 'disconnected' }));
-          }
-        });
-
-        tiktokConnection.on('error', (err) => {
-          if (err && err.message) {
-            console.log('TikTok error:', err.message);
-            if (clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
-            }
-          }
-        });
-
-        tiktokConnection.on('member', (data) => {
-          console.log('Member joined:', data.uniqueId);
-        });
-
-        tiktokConnection.on('roomUser', (data) => {
-          console.log('Room user count:', data.viewerCount);
-        });
-
-        tiktokConnection.on('social', (data) => {
-          console.log('Social event:', data.uniqueId, data.displayType);
-        });
+        connectTikTok(username);
       }
-    } catch(e) {
-      console.log('Parse error:', e.message);
-    }
+    } catch {}
   });
 
   clientWs.on('close', () => {
-    console.log('Browser disconnected');
-    currentUsername = null;
-    sentConnected = false;
     if (tiktokConnection) {
       try { tiktokConnection.disconnect(); } catch {}
-      tiktokConnection = null;
     }
   });
 });
